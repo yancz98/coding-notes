@@ -122,7 +122,7 @@ $ redis-cli -h host -p port -a requirepass
 > auth <requirepass>
 
 # 将 Redis 的执行结果-写入文件
-redis-cli -h 127.0.0.1 -p 6379 -a ycz keys '*' >keys.txt 
+> redis-cli -h 127.0.0.1 -p 6379 -a ycz keys '*' > keys.txt 
 ```
 
 ### 4、远程访问
@@ -2960,7 +2960,7 @@ LLEN key
 > 返回列表中指定范围的元素（0 -1 代表全部）。
 
 ```
-LLEN key
+LRANGE key
 ```
 
 ##### LREM
@@ -3281,6 +3281,12 @@ ZUNIONSTORE destination numkeys key [key ...] [WEIGHTS weight] [AGGREGATE SUM|MI
 
 
 ### 8. 事务（Transaction）
+
+-   事务保证所有包含的命令都将按顺序执行到完成。
+-   不会被其他客户端的命令中断（保证命令包作为单个隔离操作执行），代替 Lua 脚本的原子操作。
+
+-   如果其中的某条命令执行失败，事务不会回滚。
+-   用 WATCH 命令监听的数据，被其他客户端修改后，本次事务将自动取消，防止数据冲突。
 
 ##### MULTI
 

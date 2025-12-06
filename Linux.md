@@ -4697,6 +4697,13 @@ Options:
 
 # 删除别名 rm
 $ unalias rm
+
+# 临时设置（当前会话有效）
+alias ll='ls -alF'
+
+# 永久设置（需添加到 ~/.bashrc 文件）
+$ vim ~/.bashrc
+alias ll='ls -alF'
 ```
 
 

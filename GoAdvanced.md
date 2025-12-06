@@ -28,7 +28,7 @@
   - Syscall 必须始终用 build 标签来保护。
 
 - Cgo must always be guarded with build tags.
-  - Cgo 必须始终用构建标签来保护。
+  - Cgo 必须始终用 build 标签来保护。
 
 - Cgo is not Go.
   - Cgo 不是 Go。
@@ -280,7 +280,7 @@ const (
     oldIterator  = 2 // 可能存在 oldbuckets 迭代器
     hashWriting  = 4 // 有一个 G 正在写 map
     sameSizeGrow = 8 // 当前 map 已 Growth 到相同大小的 new map
-)    
+)
 
 // A header for a Go map.
 type hmap struct {
@@ -450,7 +450,7 @@ tophash：151                                                      低(B=5)位�
 
 - 落桶规则：根据 hash(key) 的低 B 位决定落入哪个桶。
 
-  B=5 时，桶数量为 2^5^=32，落入桶 bucket[10]。
+  B=5 时，桶数量为 2^5=32，落入桶 bucket[10]。
 
 - 桶内位置：根据 hash(key) 的高 8 位计算 tophash。
 
@@ -1541,6 +1541,8 @@ func main() {
 - 对于容量为 m 的缓冲型 channel，第 n 个 `receive` 一定 `happened before` 第 n+m 个 **send finished**。
 
 - 对于非缓冲型的 channel，第 n 个 receive 一定 `happened before` 第 n 个 **send finished**。
+
+    >   对于非缓冲型的 channel，receive 一定要在 send 完成之前。
 
 ```go
 package main
@@ -2993,6 +2995,83 @@ Go 没法使用工作线程的本地缓存 mcache 和全局中心缓存 mcentral
 ### 5、内存重排
 
 内存重排是指程序在实际运行时对内存的访问顺序和代码编写时的顺序不一致，主要是为了提高运行效率。分别是硬件层面的 `CPU 重排` 和软件层面的 `编译器重排`。
+
+>   [Memory Reordering Caught in the Act](https://preshing.com/20120515/memory-reordering-caught-in-the-act/)
+
+```go
+package main
+
+import (
+	"fmt"
+	"runtime"
+	"sync"
+	_ "sync/atomic"
+)
+
+func withCpuReordering() {
+	index := 0
+	for {
+		index += 1
+
+		var a, b int32 = 0, 0
+		var x, y int32 = 0, 0
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+
+		go func() {
+			defer wg.Done()
+
+			a = 1
+			x = b
+
+			// 【防止指令重拍】方式 2：原子操作
+			// atomic.StoreInt32(&a, 1)
+			// atomic.StoreInt32(&x, atomic.LoadInt32(&b))
+		}()
+
+		go func() {
+			defer wg.Done()
+
+			b = 1
+			y = a
+
+			// 【防止指令重拍】方式 2：原子操作
+			// atomic.StoreInt32(&b, 1)
+			// atomic.StoreInt32(&y, atomic.LoadInt32(&a))
+		}()
+		wg.Wait()
+
+		if x == 0 && y == 0 {
+			panic("CPU Reordering occurs!")
+		} else {
+			fmt.Println("Now processing in loop", index)
+		}
+	}
+}
+
+func main() {
+	fmt.Println("CPU 核数：", runtime.NumCPU())
+	// 【防止指令重拍】方式 1：单进程
+	// runtime.GOMAXPROCS(1)
+	withCpuReordering()
+}
+```
+
+>   发生 CPU 重排
+
+```
+Now processing in loop 1
+Now processing in loop ...
+panic: CPU Reordering occurs!
+
+goroutine 1 [running]:
+main.withCpuReordering()
+        /Users/yanchangzheng/Desktop/notes.go/abc.go:45 +0x228
+main.main()
+        /Users/yanchangzheng/Desktop/notes.go/abc.go:56 +0x84
+exit status 2
+```
 
 
 

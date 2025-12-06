@@ -739,7 +739,7 @@ all：=all（列子查询）、<>all（列子查询）
 
 > 只有 InnoDB 存储引擎支持事务
 
-```mysql
+```sql
 # 关闭自动提交
 SET AUTOCOMMIT = 0;
 
@@ -758,31 +758,118 @@ COMMIT;
 # 2-回滚事务（清空之前的操作）
 ROLLBACK;	
 
-④回滚点 savepoint
+"""
+回滚点 savepoint
 记录失败语句之前的位置
 增加回滚点：savepoint 回滚点名；
 回到回滚点：rollback to 回滚点名；
+"""
+```
 
-# 事务的特点 ACID
-原子性、一致性、隔离性、持久性
-注：根据主键索引查找记录时，只隔离该条记录。全表检索时，隔离整表。
+#### 5.1、事务的特性（ACID）
 
-========== 事务的隔离级别 ==========
-①脏读：读修改已提交的
-②幻读：读新增已提交的
-③不可重复读：读修改未提交的
-#隔离级别
-①READ UNCOMMITTED（读未提交数据）
-②READ COMMITED（读已提交数据）-- 避免脏读
-③REPEATABLE READ（可重复读）-- 默认（避免脏读和重复读）
-④SERIALIZABLE（串行化）-- 全避免，性能低
+原子性（Atomicity）：事务是一个不可分割的工作单元（整体），确保事务中的所有操作要么全部完成，要么全部不执行。如果事务执行失败，则需要进行回滚。
+一致性（Consistency）：事务不能破坏数据的完整性和业务的一致性，确保事务将数据库从一个有效的状态转变到另一个有效的状态。
+隔离性（Isolation）：事务所操作的数据在提交之前，对其他事务的可见程度。
+持久性（Durability）：一旦事务提交，它对数据库中数据的改变就是永久的。
 
+>   ACID 实现原理：
+
+-   原子性：通过 undolog 实现，需要回滚时，可以利用 undolog 来撤销已执行的操作。
+-   一致性：由事务的原子性、隔离性、持久性共同保证。
+-   隔离性：隔离级别通过数据库的锁机制（针对写写操作）和 MVCC 技术（针对读写操作）实现。
+-   持久性：由 redolog 保证，redolog 被称作重做日志，是物理日志，记录了事务执行后需要重做的操作。redolog 确保所有已提交的事务能够被重做，从而保持数据的持久性。
+
+#### 5.2、隔离级别
+
+```sql
 #查看当前的隔离级别：
 select @@tx_isolation;
 
 #设置当前连接的隔离级别：
 set transaction isolation level read committed;
 ```
+
+在并发情况下，对同一个数据进行读写操作会产生并发问题。事务的隔离级别用来解决**并发事务**所产生的问题。
+
+-   READ UNCOMMITTED（读未提交）
+    
+    会出现**脏读**：在事务进行过程中，读到了其它事务未提交的数据。
+    
+-   READ COMMITED（读已提交）
+    
+    避免脏读
+    
+    会出现**不可重复读**：在一个事务过程中，同一行数据多次查询的结果不同（读到其他事务已提交的数据）。
+    
+-   REPEATABLE READ（可重复读）-- 默认
+    
+    避免脏读和不可重复读
+    
+    会出现**幻读**：在一个事务过程中，用同样的操作查询数据（争对行数的变化），得到的记录数不相同。
+    
+-   SERIALIZABLE（串行化）
+
+    避免幻读，并发性能低（加表锁）。
+
+#### 5.3、MVCC
+
+MVCC（Multiversion Concurrency Control）多版本并发控制：是 InnoDB 引擎用于解决 读写冲突的机制，能在**无锁的情况下支持并发事务**。它通过数据版本管理和 ReadView（读取视图）来实现一致性读，从而避免加锁，提高数据库吞吐量。
+
+1、MVCC 依赖的两个重要机制：
+
+-   版本链（Undo Log）：数据更新不会直接覆盖，而是生成多个历史版本，新旧数据通过 undolog 形成版本链。
+-   快照视图（Read View）：事务查询时生成 ReadView，保证事务期间查询的数据始终一致（即一致性读）。
+
+2、MVCC 的关键数据结构：
+
+在 InnoDB 的聚簇索引记录中，每条数据都会有三个隐藏的系统字段，用于 MVCC 版本控制：
+
+| 隐藏列              | 作用                                                         |
+| ------------------- | ------------------------------------------------------------ |
+| DB_ROW_ID（6 Byte） | 未指定主键时，InnoDB 自动维护的主键。                        |
+| DB_TRX_ID（6 Byte） | 标记最后一次修改（删改）该行的事务ID。                       |
+| DB_ROLL_PTR         | 回滚指针，指向该行的上一个版本对应的 undolog 地址（回滚日志）。事务回滚时，通过这个指针就能找到历史数据版本。 |
+
+3、版本链（undolog chain）：
+
+每次 UPDATE/DELETE，InnoDB 不会直接修改数据，而是
+
+-   生成 Undo Log，记录旧值。
+-   新值更新到数据页。
+-   事务提交后，新数据可见，旧数据仍可用于 MVCC 读取。
+
+4、ReadView（快照视图）
+
+ReadView 决定事务在 MVCC 读取哪些版本的数据，它包含：
+
+| 字段             | 含义                                           |
+| ---------------- | ---------------------------------------------- |
+| m_trx_ids        | 记录当前所有未提交事务的 ID                    |
+| m_up_limit_id    | 所有未提交事务 ID 的最小值，即最早的未提交事务 |
+| m_low_limit_id   | 下一个将要分配的事务 ID                        |
+| m_creator_trx_id | 当前事务的 ID                                  |
+
+Read View 判断 trx_id 对应的记录是否可见的规则：
+
+-   trx_id 小于 m_up_limit_id：当前事务在 ReadView 生成前已提交，**可见**。
+-   trx_id 属于 m_trx_ids：当前事务未提交，**不可见**。
+-   trx_id 大于等于 m_low_limit_id：当前事务在 ReadView 生成后才开始，**不可见**。
+-   trx_id 等于 m_createor_trx_id：事务自己修改的数据，**可见**。
+
+5、MVCC 在不同隔离级别的行为：
+
+-   读未提交：无需锁、无需 MVCC，因为修改操作直接修改数据源，所以会出现脏读。
+-   读已提交：每次查询都会创建 ReadView 快照，会导致不可重复读。
+-   可重复读：事务第一次查询时创建 ReadView，后续相同查询复用，保证事务期间的一致性读。
+-   串行化：MVCC 不生效，使用表锁，并发性低。
+
+6、注意：
+
+-   UndoLog过多影响性能：长事务会导致 Undo Log 不能回收，占用大量存储。
+-   事务过多可能影响 MVCC 的查询性能，m_trx_ids 过长，会导致 Read View 计算开销增加。
+
+
 
 ### 6、锁
 
@@ -844,6 +931,14 @@ SHOW STATUS LIKE 'innodb_row_lock_%';
 （3）间隙锁
 
 在通过范围条件而不是等值条件检索数据时，InnoDB 会锁定范围内的所有索引键值，即使这个键值不存在，被锁定的“间隙”就是间隙锁。此时想要插入间隙内的数据时，无辜阻塞。
+
+共享锁和独占锁
+
+意向锁
+
+记录锁
+
+临键锁
 
 ### 7、预处理语句
 
@@ -921,6 +1016,31 @@ default-storage-engine = MyISAM/InnoDB;
 ```
 
 InnoDB 表必须要有主键，且推荐整形自增（减少往索引中间的插入和平衡）。若不存在主键，MySQL 会自动增加一个隐藏列作为主键维护表。
+
+**Table 18.1 Storage Engines Feature Summary**
+
+| Feature                                | MyISAM       | Memory           | InnoDB       | Archive      | NDB          |
+| :------------------------------------- | :----------- | :--------------- | :----------- | :----------- | :----------- |
+| B-tree indexes                         | Yes          | Yes              | Yes          | No           | No           |
+| Backup/point-in-time recovery (note 1) | Yes          | Yes              | Yes          | Yes          | Yes          |
+| Cluster database support               | No           | No               | No           | No           | Yes          |
+| Clustered indexes                      | No           | No               | Yes          | No           | No           |
+| Compressed data                        | Yes (note 2) | No               | Yes          | Yes          | No           |
+| Data caches                            | No           | N/A              | Yes          | No           | Yes          |
+| Encrypted data                         | Yes (note 3) | Yes (note 3)     | Yes (note 4) | Yes (note 3) | Yes (note 5) |
+| Foreign key support                    | No           | No               | Yes          | No           | Yes          |
+| Full-text search indexes               | Yes          | No               | Yes (note 6) | No           | No           |
+| Geospatial data type support           | Yes          | No               | Yes          | Yes          | Yes          |
+| Geospatial indexing support            | Yes          | No               | Yes (note 7) | No           | No           |
+| Hash indexes                           | No           | Yes              | No (note 8)  | No           | Yes          |
+| Index caches                           | Yes          | N/A              | Yes          | No           | Yes          |
+| Locking granularity                    | Table        | Table            | Row          | Row          | Row          |
+| MVCC                                   | No           | No               | Yes          | No           | No           |
+| Replication support (note 1)           | Yes          | Limited (note 9) | Yes          | Yes          | Yes          |
+| Storage limits                         | 256TB        | RAM              | 64TB         | None         | 384EB        |
+| T-tree indexes                         | No           | No               | No           | No           | Yes          |
+| Transactions                           | No           | No               | Yes          | No           | Yes          |
+| Update statistics for data dictionary  | Yes          | Yes              | Yes          | Yes          | Yes          |
 
 ## 七、分区
 
@@ -1697,7 +1817,11 @@ mysqldumpslow -s t -t 10 /var/lib/mysql/localhost-slow.log
 
 （5）DDL 日志
 
+（6）InnoDB 日志
 
+undolog
+
+redolog
 
 ### 2、SHOW PROFILE
 
@@ -1891,7 +2015,7 @@ EXPLAIN SELECT * FROM table WHERE 1 = 1;
 | ref           | 哪些列或常量被用于查找索引列上的值。                         |
 | rows          | 查询时必须检查的行数。                                       |
 | filtered      | 通过查询条件获取的最终记录数 ÷ 通过访问类型（type）指定的方式搜索出来的记录数×100% <br/>如果比例很低，说明存储引擎层返回的数据需要经过大量过滤，效率低。 |
-| Extra         | Extra：处理查询时的额外信息。<br/><br/>**Using filesort**【慢】：MySQL中无法利用索引完成的排序，只能在内存或磁盘中进行排序操作。<br/>**Using temporary**【慢】：使用临时表，MySQL 如果不能有效利用索引来完成去重、排序、分组等查询，将创建内部临时表来保存中间结果。<br/>**Using index**：使用索引覆盖，扫描索引树一步完成，不需要回表。<br/>**Using index condition**：使用了索引，但需要回表。<br/>**Using where**：使用 WHERE 条件过滤。<br/>**Using join buffer**：使用了连接缓存，在连接查询执行过程中，当被驱动表不能有效的利用索引加快访问速度，MySQL 一般会为其分配一块名叫 join buffer 的内存块来加快查询速度。<br/>**impossible where**：WHERE 子句的值总是 false，不能获取到数据。<br/>**select tables optimized away**：在没有 GROUP 子句的情况下，基于索引优化 MIN、MAX 操作或者对于 MyISAM 存储引擎优化 COUNT(*) 操作，不必等到执行阶段再进行计算，查询执行计划生成的阶段即完成优化。 <br/>**distinct**：优化 DISTINCT，在找到第一个匹配的元组后记停止找相同值的工作。<br />**no matching row in const table**：JOIN 表中没有找到匹配的行。<br />**unique row not found**：JOIN 表中主键或唯一键不存在。 |
+| Extra         | Extra：处理查询时的额外信息。<br/><br/>**Using filesort**【慢】：MySQL中无法利用索引完成的排序，只能在内存或磁盘中进行排序操作。<br/>**Using temporary**【慢】：使用临时表，MySQL 如果不能有效利用索引来完成去重、排序、分组等查询，将创建内部临时表来保存中间结果。<br/>**Using index**：使用索引覆盖，扫描索引树一步完成，不需要回表。<br/>**Using index condition**：使用了索引下推，还需要回表。<br/>**Using where**：使用 WHERE 条件过滤。<br/>**Using join buffer**：使用了连接缓存，在连接查询执行过程中，当被驱动表不能有效的利用索引加快访问速度，MySQL 一般会为其分配一块名叫 join buffer 的内存块来加快查询速度。<br/>**impossible where**：WHERE 子句的值总是 false，不能获取到数据。<br/>**select tables optimized away**：在没有 GROUP 子句的情况下，基于索引优化 MIN、MAX 操作或者对于 MyISAM 存储引擎优化 COUNT(*) 操作，不必等到执行阶段再进行计算，查询执行计划生成的阶段即完成优化。 <br/>**distinct**：优化 DISTINCT，在找到第一个匹配的元组后记停止找相同值的工作。<br />**no matching row in const table**：JOIN 表中没有找到匹配的行。<br />**unique row not found**：JOIN 表中主键或唯一键不存在。 |
 
 > `Using temporary` 产生的条件：
 
@@ -1950,6 +2074,36 @@ Each SELECT searches only one key and can be optimized:
 用 join 代替 子查询
 使用 UNION ALL 代替 UNION
 ```
+
+### 索引下推
+
+索引下推（Index Condition Pushdown, ICP）是 MySQL 优化器在 InnoDB 存储引擎中引入的一种查询优化技术，从 MySQL 5.6 开始支持。它的目的是通过将部分查询条件“下推”到存储引擎层，在扫描索引时就进行过滤，减少数据的回表次数，提升查询性能。
+
+在多列联合索引中尤为有效，是优化复杂查询的一个重要工具。
+
+**索引下推的原理：**
+
+-   传统方法：MySQL 在存储引擎中扫描索引后，返回主键值给服务器层，服务器层再回表获取完整行数据并进行条件过滤。
+
+-   索引下推：MySQL 将部分查询条件下推到存储引擎，存储引擎在扫描索引时即可过滤掉不符合条件的记录，减少回表次数。
+
+**索引下推的适用场景：**
+
+-   多列联合索引：部分查询条件可在索引扫描时应用。
+-   查询过滤较强：索引中字段的过滤条件能显著减少数据量。
+-   大数据量查询：索引下推的优化效果在大数据量查询中更为明显。
+
+
+
+-   索引下推需要查询条件中的字段在索引中存在，并符合最左前缀原则。
+-   如果下推的条件无法有效过滤数据，则优化效果不明显。
+
+**使用场景限制：**
+
+-   适用于range、ref、eq_ref和ref_or_null查询
+-   InnoDB和MyISAM都支持，Mysql partition分表也可以使用
+-   对于InndoDB而言，ICP只支持二级索引，主键不需要回表
+-   子查询不支持
 
 
 

@@ -1690,14 +1690,18 @@ func main() {
 
 进程：是指程序在操作系统中的一次执行过程，是系统进行资源分配的基本单元。并且多个进程之间的空间是独立的。
 
-### 2、Go 并发编程（goroutine）
+>   Go 的并发编程，启动一个 goroutine
 
 ```go
 // 启动 goroutine
 go func () {
     println("hello go routine")
 }()
+```
 
+>   示例
+
+```go
 // 示例 - 不会有任何输出
 package main
 
@@ -1732,8 +1736,215 @@ func main() {
  */
 ```
 
-### 3、并发通信
+### 2、控制 goroutine 的执行顺序
 
+>   有 3 个 goroutine，分别连续 10 次打印 A、B、C。
+
+#### （1）让 3 个协程交替执行
+
+>   依次打印：ABC, ABC, ABC, ...
+
+```go
+package main
+
+import (
+	"fmt"
+	"sync"
+	"time"
+)
+
+// 每个函数执行的控制信号
+var (
+	as = make(chan struct{}, 1)
+	bs = make(chan struct{}, 1)
+	cs = make(chan struct{}, 1)
+)
+
+func a() {
+	for i := 0; i < 10; i++ {
+		<-as
+		time.Sleep(100 * time.Millisecond)
+		fmt.Println(time.Now().UnixNano(), "A")
+		bs <- struct{}{}
+	}
+}
+
+func b() {
+	for i := 0; i < 10; i++ {
+		<-bs
+		time.Sleep(100 * time.Millisecond)
+		fmt.Println(time.Now().UnixNano(), "B")
+		cs <- struct{}{}
+	}
+}
+
+func c() {
+	for i := 0; i < 10; i++ {
+		<-cs
+		time.Sleep(100 * time.Millisecond)
+		fmt.Println(time.Now().UnixNano(), "C")
+		as <- struct{}{}
+	}
+}
+
+func main() {
+	wg := sync.WaitGroup{}
+	wg.Add(3)
+	
+	go func() {
+		defer wg.Done()
+		a()
+	}()
+	go func() {
+		defer wg.Done()
+		b()
+	}()
+	go func() {
+		defer wg.Done()
+		c()
+	}()
+
+	// begin: A -> B -> C
+	as <- struct{}{}
+	wg.Wait()
+	fmt.Println("end...")
+}
+```
+
+#### （2）让 3 个协程依次执行
+
+>   依次打印：AAA..., BBB..., CCC...
+
+```go
+package main
+
+import (
+	"fmt"
+	"sync"
+	"time"
+)
+
+// 每个函数执行的控制信号
+var (
+	as = make(chan struct{})
+	bs = make(chan struct{})
+	cs = make(chan struct{})
+)
+
+func a() {
+	<-as
+	for i := 0; i < 10; i++ {
+		time.Sleep(100 * time.Millisecond)
+		fmt.Println(time.Now().UnixNano(), "A")
+	}
+	bs <- struct{}{}
+}
+
+func b() {
+	<-bs
+	for i := 0; i < 10; i++ {
+		time.Sleep(100 * time.Millisecond)
+		fmt.Println(time.Now().UnixNano(), "B")
+	}
+	cs <- struct{}{}
+}
+
+func c() {
+	<-cs
+	for i := 0; i < 10; i++ {
+		time.Sleep(100 * time.Millisecond)
+		fmt.Println(time.Now().UnixNano(), "C")
+	}
+}
+
+func main() {
+	wg := sync.WaitGroup{}
+	wg.Add(3)
+
+	go func() {
+		defer wg.Done()
+		a()
+	}()
+	go func() {
+		defer wg.Done()
+		b()
+	}()
+	go func() {
+		defer wg.Done()
+		c()
+	}()
+
+	// begin: A() -> B() -> C()
+	as <- struct{}{}
+	wg.Wait()
+	fmt.Println("end...")
+}
+```
+
+#### （3）让 3 个协程同时执行
+
+```go
+package main
+
+import (
+  "fmt"
+  "sync"
+  "time"
+)
+
+// 每个函数执行的控制信号
+var ready = make(chan struct{})
+
+func a() {
+  <-ready
+  time.Sleep(100 * time.Millisecond)
+  fmt.Println(time.Now().UnixMilli(), "A")
+}
+
+func b() {
+  <-ready
+  time.Sleep(100 * time.Millisecond)
+  fmt.Println(time.Now().UnixMilli(), "B")
+}
+
+func c() {
+  <-ready
+  time.Sleep(100 * time.Millisecond)
+  fmt.Println(time.Now().UnixMilli(), "C")
+}
+
+func main() {
+  wg := sync.WaitGroup{}
+  wg.Add(3)
+
+  go func() {
+    defer wg.Done()
+    a()
+  }()
+  go func() {
+    defer wg.Done()
+    b()
+  }()
+  go func() {
+    defer wg.Done()
+    c()
+  }()
+
+  // 准备好了：通过关闭 channel 实现广播效果
+  // 注：使用 sync.Cond{} 可以实现多次广播
+  close(ready)
+
+  wg.Wait()
+  fmt.Println("end...")
+}
+```
+
+
+
+### 3、并发通信（CSP）
+
+> Don't communicate by sharing memory, share memory by communicating.
+>
 > 推荐使用消息传递而不是共享内存来进行并发编程（面向消息编程）。
 
 #### （1）资源竞争案例
@@ -1743,32 +1954,27 @@ package main
 
 import (
 	"fmt"
+	"time"
 )
 
-var (
-	// 存储阶乘的 Map
-	factMap = make(map[int]int, 10)
-)
+var inited = false
+
+func setup() {
+	time.Sleep(time.Second)
+	inited = true
+}
 
 func main() {
-	for i := 1; i <= 10; i++ {
-		go SetFact(i)
-		go GetFact(i)
-	}
-}
+	go setup()
 
-// 设置阶乘
-func SetFact(n int) {
-	res := 1
-	for i := 1; i <= n; i++ {
-		res *= i
+	for {
+		if inited {
+			break
+		}
+		time.Sleep(100*time.Millisecond)
 	}
-    factMap[n] = res
-}
 
-// 获取阶乘
-func GetFact(n int) {
-	fmt.Printf("Factorial(%d) = %d \n", n, factMap[n])
+	fmt.Println("setup succeed...")
 }
 ```
 
@@ -1778,67 +1984,29 @@ func GetFact(n int) {
 # -race 选项查看资源竞争情况
 > go run -race main.go
 ==================
-# 数据竞争1：写写竞争
+# 警告：数据竞争（读写）
 WARNING: DATA RACE
-# goroutine-8 在 <0x00c00006e3c0> 处写入
-Write at 0x00c00006e3c0 by goroutine 8:
-  runtime.mapassign_fast64()
-      D:/Go-16/src/runtime/map_fast64.go:92 +0x0
-  main.Factorial()
-      F:/GoProject/myProject/public/main.go:28 +0x91
-
-# goroutine-7 上一次在 <0x00c00006e3c0> 写入：
-Previous write at 0x00c00006e3c0 by goroutine 7:
-  runtime.mapassign_fast64()
-      D:/Go-16/src/runtime/map_fast64.go:92 +0x0
-  main.Factorial()
-      F:/GoProject/myProject/public/main.go:28 +0x91
-
-# goroutine-8（运行中）、 goroutine-7（已完成）都创建于 main()
-Goroutine 8 (running) created at:
+# goroutine_7 在 <0x0001008c1881> 处写入
+Write at 0x0001008c1881 by goroutine 7:
+  main.setup()
+      /Users/yanchangzheng/Desktop/notes.go/main.go:12 +0x38
+# 主线程_main 上一次在 <0x0001008c1881> 处读取
+Previous read at 0x0001008c1881 by main goroutine:
   main.main()
-      F:/GoProject/myProject/public/main.go:13 +0x7a
+      /Users/yanchangzheng/Desktop/notes.go/main.go:19 +0x48
 
-Goroutine 7 (finished) created at:
+# goroutine_7（已完成）创建于 main()
+Goroutine 7 (running) created at:
   main.main()
-      F:/GoProject/myProject/public/main.go:13 +0x7a
+      /Users/yanchangzheng/Desktop/notes.go/main.go:16 +0x2c
 ==================
-==================
-# 数据竞争2：读写竞争
-WARNING: DATA RACE
-# 主线程在 <0x00c000082168> 处读取
-Read at 0x00c000082168 by main goroutine:
-  main.main()
-      F:/GoProject/myProject/public/main.go:17 +0x12c
-
-# goroutine-7 上一次在 <0x00c000082168> 写入：
-Previous write at 0x00c000082168 by goroutine 7:
-  main.Factorial()
-      F:/GoProject/myProject/public/main.go:28 +0xa6
-
-# goroutine-7（已完成）创建于 main()
-Goroutine 7 (finished) created at:
-  main.main()
-      F:/GoProject/myProject/public/main.go:13 +0x7a
-==================
-Factorial(1) = 1
-Factorial(4) = 24
-Factorial(5) = 120
-Factorial(7) = 5040
-Factorial(8) = 40320
-Factorial(2) = 2
-Factorial(3) = 6
-Factorial(6) = 720
-Factorial(9) = 362880
-Factorial(10) = 3628800
-# 发现2个数据竞争
-Found 2 data race(s)
+setup succeed...
+# 发现 1 个数据竞争
+Found 1 data race(s)
 exit status 66
 ```
 
-#### （1）共享内存通信（不推荐）
-
-- sync.Mutex
+#### （2）共享内存通信（Mutex）
 
 ```go
 package main
@@ -1846,153 +2014,89 @@ package main
 import (
 	"fmt"
 	"sync"
+	"time"
 )
 
-var (
-	// 存储阶乘的 Map
-	factMap = make(map[int]int, 10)
-	// 声明一个全局的互斥锁 lock
-	lock = sync.Mutex{}
-)
+var inited = false
+var lock = new(sync.Mutex) // or sync.RWMutex{}
 
-func main() {
-	for i := 1; i <= 10; i++ {
-		go SetFact(i)
-		go GetFact(i)
-	}
-}
-
-// 设置阶乘
-func SetFact(n int) {
-	res := 1
-	for i := 1; i <= n; i++ {
-		res *= i
-	}
+func setup() {
+	time.Sleep(time.Second)
 
 	// 加锁
 	lock.Lock()
 
 	// ------------------ 临界区 ------------------ //
-	factMap[n] = res
+	inited = true
 	// ------------------ 临界区 ------------------ //
 
 	// 解锁
 	lock.Unlock()
 }
 
-// 获取阶乘
-func GetFact(n int) {
-	// 加锁
-	lock.Lock()
-
-	// ------------------ 临界区 ------------------ //
-	fmt.Printf("Factorial(%d) = %d \n", n, factMap[n])
-	// ------------------ 临界区 ------------------ //
-
-	// 解锁
-	lock.Unlock()
-}
-```
-
-- sync.RWMutex
-
-```go
-package main
-
-import (
-	"fmt"
-	"sync"
-)
-
-var (
-	// 存储阶乘的 Map
-	factMap = make(map[int]int, 10)
-	// 声明一个全局的读写互斥锁 lock
-	lock = sync.RWMutex{}
-)
-
 func main() {
-	for i := 1; i <= 10; i++ {
-		go SetFact(i)
-		go GetFact(i)
-	}
-}
+	go setup()
 
-// 设置阶乘
-func SetFact(n int) {
-	res := 1
-	for i := 1; i <= n; i++ {
-		res *= i
-	}
-
-	// 加写锁
-	lock.Lock()
-
-	// ------------------ 临界区 ------------------ //
-	factMap[n] = res
-	// ------------------ 临界区 ------------------ //
-
-	// 解写锁
-	lock.Unlock()
-}
-
-// 获取阶乘
-func GetFact(n int) {
-	// 加读锁
-	lock.RLock()
-
-	// ------------------ 临界区 ------------------ //
-	fmt.Printf("Factorial(%d) = %d \n", n, factMap[n])
-	// ------------------ 临界区 ------------------ //
-
-	// 解读锁
-	lock.RUnlock()
-}
-```
-
-虽然用同步锁机制解决数据竞争的问题，但线程间的通信还是存在问题。因写进程还未写入数据，读进程就去读而读到数据的零值。
-
-#### （2）消息传递通信（chan）
-
-```go
-package main
-
-import "fmt"
-
-func writeData(chanInt chan int) {
-	for i := 1; i <= 200; i++ {
-		chanInt <- i
-		fmt.Println("入队：", i)
-	}
-
-	// 写完数据后，关闭队列
-	close(chanInt)
-}
-
-func readData(chanInt chan int, chanExit chan bool) {
-	for v := range chanInt {
-		fmt.Println("读取数据：", v)
-	}
-
-	// 读完数据后，向退出管道添加标识，并关闭管道
-	chanExit <- true
-	close(chanExit)
-}
-
-func main() {
-    // 容量 100 < 最大可能长度 200
-	channelInt := make(chan int, 100)
-	channelExit := make(chan bool, 1)
-
-	go writeData(channelInt)
-	go readData(channelInt, channelExit)
-
-	// 直到从已关闭的退出管道中读取到最后一个值时，才退出主线程
 	for {
-		_, ok := <-channelExit
-		if ok == false {
+		lock.Lock()
+		ok := inited
+		lock.Unlock()
+
+		if ok {
 			break
 		}
+		fmt.Println("not set")
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	fmt.Println("setup succeed...")
+}
+```
+
+>   分析竞争：
+
+```sh
+# -race 选项查看资源竞争情况
+# 用同步锁机制可以解决数据竞争的问题
+> go run -race main.go
+not set
+not set
+not set
+not set
+not set
+not set
+not set
+not set
+not set
+not set
+setup succeed...
+```
+
+#### （3）通信共享内存（chan）
+
+```go
+package main
+
+import (
+	"fmt"
+	"time"
+)
+
+var inited = false
+var ok = make(chan bool)
+
+func setup() {
+	time.Sleep(time.Second)
+
+	inited = true
+	ok <- true
+}
+
+func main() {
+	go setup()
+
+	if <-ok {
+		fmt.Println("setup succeed...")
 	}
 }
 ```
