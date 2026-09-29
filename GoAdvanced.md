@@ -1,59 +1,261 @@
-## 一、Go 谚语
+## 一、Go Proverbs（哲学）
 
-> Go 语言之父 Rob Pike 在 2015 年分享的主题《Go Proverbs》中讲的 10+ 条 Go 谚语。
+> Go 语言之父 Rob Pike 在 2015 年分享的主题[《Go Proverbs》](https://go-proverbs.github.io/)中讲的 10+ 条 Go 谚语。
+>
+> Video: https://www.youtube.com/watch?v=PAAkCSZUG1c
 
-- Don't communicate by sharing memory, share memory by communicating.
-  - 不要通过共享内存来通信，通过通信来共享内存。
+### 1.1、Don't communicate by sharing memory, share memory by communicating.
 
-- Concurrency is not parallelism.
-  - 并发不是并行。
-- Channels orchestrate; mutexes serialize.
-  - channel 是协调的，锁是串行的。
-- The bigger the interface, the weaker the abstraction.
-  - 接口越大，抽象性越弱。
+>   不要通过共享内存来通信，而要通过通信来共享内存。
 
-- Make the zero value useful.
-  - 让零值变得有用。
+**❌ 传统方式（共享内存）**
 
-- `interface{}` says nothing.
-  - `interface{}` 什么也没说。
+```go
+var counter int
+var mu sync.Mutex
 
-- Gofmt's style is no one's favorite, yet gofmt is everyone's favorite.
-  - Gofmt 的风格没有人喜欢，但 Gofmt 却是大家的最爱。
+func increment() {
+    mu.Lock()
+    counter++
+    mu.Unlock()
+}
+```
 
-- A little copying is better than a little dependency.
-  - 复制一点总比依赖一点好。
+**✅ Go 方式（通信）**
 
-- Syscall must always be guarded with build tags.
-  - Syscall 必须始终用 build 标签来保护。
+```go
+func counter(stop <-chan struct{}) <-chan int {
+    ch := make(chan int)
+    go func() {
+        i := 0
+        for {
+            select {
+            case <-stop:
+                close(ch)
+                return
+            case ch <- i:
+                i++
+            }
+        }
+    }()
+    return ch
+}
+```
 
-- Cgo must always be guarded with build tags.
-  - Cgo 必须始终用 build 标签来保护。
+**工程思考**：
 
-- Cgo is not Go.
-  - Cgo 不是 Go。
+-   Channel 让 goroutine 之间的数据流变得显式，更容易追踪。
+-   但 channel 不是万能药，对于简单的互斥场景，`sync.Mutex` 仍然清晰高效。
+-   关键原则：**优先考虑通过 channel 传递所有权，而非共享变量加锁**。
 
-- With the unsafe package there are no guarantees.
-  - 使用 unsafe 包没有任何保证。
-- Clear is better than clever.
-  - 清晰的比聪明的好。
-- Reflection is never clear.
-  - 反射从来不是清晰的。
+### 1.2、Concurrency is not parallelism.
 
-- Errors are values.
-  - 错误是值。（考虑失败，而不是成功。）
+>   并发不是并行。
 
-- Don't just check errors, handle them gracefully.
-  - 不要只是检查错误，要优雅地处理它们。
+-   **并发（Concurrency）**：代码结构层面，处理多个任务的能力。
+-   **并行（Parallelism）**：运行层面，同时执行多个任务。
 
-- Design the architecture, name the components, document the details.
-  * 设计架构，命名组件，记录细节。
+**工程思考**：
 
-- Documentation is for users.
-  - 文档是为用户准备的。
+-   设计并发代码时，思考的是“任务分解”和“编排”，而不是“如何让它们同时跑”。
+-   一个 goroutine 池 + channel 的设计就是并发模型，是否并行取决于 CPU 核心数。
+-   这个区分帮助我们避免过早优化：先设计正确的并发结构，并行是运行时的红利。
 
-* Don't panic.
-  * 不要 panic。
+### 1.3、Channels orchestrate; mutexes serialize.
+
+>   Channel 用于编排；Mutex 用于串行化。
+
+**工程思考**：
+
+-   Channel 适合“协调”多个 goroutine 的工作流程（比如 worker pool、pipeline）。
+-   Mutex 适合保护一段临界区，让多个 goroutine 对共享资源的访问串行化。
+-   常见误区：看到并发就用 channel，导致代码复杂。**选对工具很重要**。
+
+### 1.4、The bigger the interface, the weaker the abstraction.
+
+>   接口越大，抽象越弱。
+
+**❌ 大接口**
+
+```go
+type DataStore interface {
+    GetUser(id int) (*User, error)
+    CreateUser(u *User) error
+    UpdateUser(u *User) error
+    DeleteUser(id int) error
+    GetOrder(id int) (*Order, error)
+    // ... 20+ 方法
+}
+```
+
+**✅ 小接口**
+
+```go
+type UserGetter interface {
+    GetUser(id int) (*User, error)
+}
+
+type UserCreator interface {
+    CreateUser(u *User) error
+}
+```
+
+**工程思考**：
+
+-   小接口易于实现、易于 mock、易于组合。
+-   接口定义在使用方，而不是实现方（“接受接口，返回结构体”）。
+-   在团队代码中，看到大接口时可以考虑拆分，让依赖关系更清晰。
+
+### 1.5、Make the zero value useful.
+
+>   让零值有用。
+
+Go 的零值机制是一大特色。充分利用它可以让代码更简洁。
+
+**✅ 有用零值示例**
+
+```go
+// src/sync/waitgroup.go
+type WaitGroup struct {
+	noCopy noCopy
+
+	state atomic.Uint64 // high 32 bits are counter, low 32 bits are waiter count.
+	sema  uint32
+}
+
+// 直接声明使用，无需构造函数
+var wg sync.WaitGroup
+```
+
+**工程思考**：
+
+-   设计类型时，思考“零值是否可以直接使用”。
+-   如果不能，考虑提供 `NewXxx` 构造函数，并在注释中说明。
+
+### 1.6、`interface{}` says nothing.
+
+>   `interface{}` 什么也没说。
+
+### 1.7、Gofmt's style is no one's favorite, yet gofmt is everyone's favorite.
+
+>   Gofmt 的风格没有人喜欢，但 gofmt 却是大家的最爱。
+
+**工程思考**：
+
+-   格式争议是最无聊的争论。
+-   团队统一使用 `gofmt` 或 `goimports`，在 CI 中强制检查。
+-   可以配合 `golangci-lint` 做更多自动化检查。
+
+### 1.8、A little copying is better than a little dependency.
+
+>   复制一点好过依赖一点。
+
+**工程思考**：
+
+-   引入一个第三方库时，权衡一下：为了省 10 行代码，引入一个巨大的依赖，值得吗？
+-   Go 的标准库非常强大，很多场景（HTTP、JSON、模板、加密）原生支持。
+-   在团队中，控制依赖数量有助于减少安全风险、构建时间、和版本冲突。
+
+### 1.9、Syscall must always be guarded with build tags.
+
+>   Syscall 必须始终用 build 标签来保护。
+
+### 1.10、Cgo must always be guarded with build tags.
+
+>   Cgo 必须始终用构建标签来保护。
+
+### 1.11、Cgo is not Go.
+
+>   Cgo 不是 Go。
+
+**工程思考**：
+
+-   使用 Cgo 会失去 Go 的大部分优势（交叉编译、垃圾回收、栈管理等）。
+-   除非性能要求极高或必须与 C 库交互，否则优先用纯 Go 方案。
+-   团队引入 Cgo 前，应充分评估维护成本和构建复杂性。
+
+### 1.12、With the unsafe package there are no guarantees.
+
+>   使用 unsafe 包没有任何保证。
+
+### 1.13、Clear is better than clever.
+
+>   清晰胜于聪明。
+
+**❌ 聪明但晦涩**
+
+```go
+// 利用 bool 转 int 的技巧
+func boolToInt(b bool) int {
+    return map[bool]int{true: 1, false: 0}[b]
+}
+```
+
+**✅ 清晰直接**
+
+```go
+func boolToInt(b bool) int {
+    if b {
+        return 1
+    }
+    return 0
+}
+```
+
+**工程思考**：
+
+-   代码首先是写给人看的。
+-   在 code review 中，如果一段代码需要“想一想才能懂”，就可以考虑重写。
+-   团队代码库中，复杂技巧往往成为新人的认知负担。
+
+### 1.14、Reflection is never clear.
+
+>   反射从来不是清晰的。
+
+### 1.15、Errors are values.
+
+>   错误是值。（考虑失败，而不是成功。）
+
+在 Go 中，error 是一个接口，是一个普通的值，可以像其他值一样处理。
+
+**工程思考**：
+
+-   不要只写 `if err != nil { return err }` 流水账。
+-   可以包装错误（`fmt.Errorf("...: %w", err)`）、自定义错误类型、用 `errors.Is`/`As` 做分类。
+-   错误处理不是“异常”，是正常的控制流。设计函数时，把错误作为返回值的一部分考虑进去。
+
+### 1.16、Don't just check errors, handle them gracefully.
+
+>   不要只是检查错误，要优雅地处理它们。
+
+**❌ 只检查不处理**
+
+```go
+if err != nil {
+    log.Println(err)
+    return
+}
+```
+
+**✅ 优雅处理**
+
+-   判断错误类型，决定是否重试、降级、返回特定状态码。
+-   记录足够上下文（请求ID、用户ID等）。
+-   返回有意义的错误信息给调用方。
+
+
+
+### 1.17、Design the architecture, name the components, document the details.
+
+>   设计架构，命名组件，记录细节。
+
+### 1.18、Documentation is for users.
+
+>   文档是为用户准备的。
+
+### 1.19、Don't panic.
+
+>   不要 panic。
 
 
 

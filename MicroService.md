@@ -285,7 +285,7 @@ service UserService {
 | uint32        | uint32  | 0      | 使用可变长编码。                                             |
 | uint64        | uint64  | 0      | 使用可变长编码。                                             |
 | sint32        | int32   | 0      | 使用可变长编码。带符号的 int 值。比 int32 更高效地编码负数。 |
-| sint64        | int64   | 0      | 使用可变长编码。带符号的 int 值。比 int32 更高效地编码负数。 |
+| sint64        | int64   | 0      | 使用可变长编码。带符号的 int 值。比 int64 更高效地编码负数。 |
 | fixed32       | uint32  | 0      | 总是 4Byte。如果数值总大于 2^28，则比 uint32 更高效。        |
 | fixed64       | uint64  | 0      | 总是 8Byte。如果数值总大于 2^56，则比 uint64 更高效。        |
 | sfixed32      | int32   | 0      | 总是 4Byte。                                                 |
@@ -355,6 +355,7 @@ Options：
 # 默认情况下，Go 代码生成器不会为服务生成输出。
 # 如果启用 gRPC 插件，则会生成支持 gRPC 的代码。
 protoc --go_out=. test.proto
+protoc --go_out=. --go-rpc_out=. test.proto
 ```
 
 > /pb/test/test.pb.go
@@ -1083,11 +1084,16 @@ func main() {
 
 
 
-## 十、Go-Kit
+## 八、Go-Kit
 
 
 
-## 十五、Go-Micro
+## 九、Go-Zero
+
+> https://go-zero.dev/zh-cn/
+
+
+## 十、Go-Micro
 
 ### 1、安装
 
